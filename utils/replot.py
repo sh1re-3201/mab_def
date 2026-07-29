@@ -73,7 +73,8 @@ def main():
 
     plt.title(f"Cumulative Regret | {clean_policy_name}") # ---> JUDUL DIPERBARUI <---
     plt.xlabel(r"Time Horizon ($T$)")
-    plt.ylabel(r"Average Cumulative Regret ($\frac{1}{n} \sum_{i=1}^n R_T^{(i)}$)")
+    plt.ylabel(r"Average Cumulative Regret")
+    # plt.ylabel(r"Average Cumulative Regret ($\frac{1}{n} \sum_{i=1}^n R_T^{(i)}$)")
     plt.ticklabel_format(style='sci', axis='both', scilimits=(0,0))
     plt.legend(loc="upper left")
     plt.tight_layout()
@@ -99,9 +100,10 @@ def main():
             rm_dict[key] = get_rolling_mean(data[rew_key], window_size)
             plt.plot(t_steps, rm_dict[key], label=f"Malicious Attack ({pct}% Malicious)", ls='-.', color=mal_colors[c_idx % len(mal_colors)])
 
-    plt.title(f"Moving Average | {clean_policy_name}") # ---> JUDUL DIPERBARUI <---
+    plt.title(f"Moving Average Reward | {clean_policy_name}") # ---> JUDUL DIPERBARUI <---
     plt.xlabel(r"Time Horizon ($T$)")
     plt.ylabel(r"Average Reward")
+    # plt.ylabel(r"Average Reward ($\frac{1}{W} \sum_{j=t-W+1}^{t} R_j$)")
     plt.ticklabel_format(style='sci', axis='x', scilimits=(0,0))
     
     if args.zoom is not None:
