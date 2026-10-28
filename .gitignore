@@ -1,3 +1,5 @@
 *.npz
 src/__pycache__
 data/
+/venv/
+/results/
