@@ -14,15 +14,17 @@ def get_rolling_mean(arr, window):
     roll_mean[window:] = (cum_sum[window:] - cum_sum[:-window]) / window
     return roll_mean
 
-def plot_results(t_steps, results_dict, k_arms, policy, run_suffix, show_plot=True):
+def plot_results(t_steps, results_dict, k_arms, policy, run_suffix, show_plot=True, defense="none", out_dir="results"):
     regret = results_dict['regret']
     reward = results_dict['reward']
     
     mark_interval = max(1, int(len(t_steps) / 10))
     window_size = min(50000, len(t_steps) // 10)
     mal_colors = ['tab:orange', 'tab:purple', 'tab:brown', 'tab:pink']
+    # Include the active defense label in plot titles whenever a defense other than "none" is used.
+    defense_tag = f" [{defense}]" if defense != "none" else ""
 
-    os.makedirs("results", exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
     # ==========================================
     # PLOT 1: Cumulative Regret
@@ -40,13 +42,13 @@ def plot_results(t_steps, results_dict, k_arms, policy, run_suffix, show_plot=Tr
         pct = int((m_val / (n_val + m_val)) * 100)
         plt.plot(t_steps, regret[key], label=f"Malicious Attack ({pct}% Malicious)", linestyle='-.', color=mal_colors[c_idx % len(mal_colors)], marker='|', markevery=mark_interval, markersize=10)
 
-    plt.title(f"Cumulative Regret (Total 25 Agents) | {policy} - K={k_arms}")
+    plt.title(f"Cumulative Regret (Total 25 Agents) | {policy}{defense_tag} - K={k_arms}")
     plt.xlabel(r"Time Horizon ($T$)")
     plt.ylabel(r"Average Cumulative Regret ($\frac{1}{n} \sum_{i=1}^n R_T^{(i)}$)")
     plt.ticklabel_format(style='sci', axis='both', scilimits=(0,0))
     plt.legend(loc="upper left")
     plt.tight_layout()
-    plt.savefig(os.path.join("results", f"plot_1_regret_{run_suffix}.png"))
+    plt.savefig(os.path.join(out_dir, f"plot_1_regret_{run_suffix}.png"))
 
     # ==========================================
     # PLOT 2: Rolling Mean Reward
@@ -61,13 +63,13 @@ def plot_results(t_steps, results_dict, k_arms, policy, run_suffix, show_plot=Tr
         pct = int((m_val / (n_val + m_val)) * 100)
         plt.plot(t_steps, get_rolling_mean(reward[key], window_size), label=f"Malicious Attack ({pct}% Malicious)", linestyle='-.', color=mal_colors[c_idx % len(mal_colors)])
 
-    plt.title(f"{window_size}-Round Rolling Mean (Total 25 Agents) | {policy} - K={k_arms}")
+    plt.title(f"{window_size}-Round Rolling Mean (Total 25 Agents) | {policy}{defense_tag} - K={k_arms}")
     plt.xlabel(r"Time Horizon ($T$)")
     plt.ylabel(r"Average Reward")
     plt.ticklabel_format(style='sci', axis='x', scilimits=(0,0))
     plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig(os.path.join("results", f"plot_3_rolling_reward_{run_suffix}.png"))
+    plt.savefig(os.path.join(out_dir, f"plot_3_rolling_reward_{run_suffix}.png"))
 
     if show_plot: plt.show()
     else: plt.close('all')
@@ -80,6 +82,15 @@ def main():
     parser.add_argument("--policy", type=str, default="UCB", choices=["UCB", "Epsilon-Greedy", "Thompson-Sampling"])
     parser.add_argument("--explore_param", type=float, default=None)
     parser.add_argument("--beta", type=float, default=2.0)
+    # Active defense CLI options matching ALGORITHMS.md Algorithms 0-3.
+    parser.add_argument("--defense", type=str, default="none", choices=["none", "gosine_block", "pure_brs", "hybrid_brs_block"])
+    # Base polynomial blocking exponent (eta > 1) for gosine_block and hybrid_brs_block.
+    parser.add_argument("--eta", type=float, default=2.0)
+    # Beta Reputation forgetting factor (lambda in (0, 1]) for pure_brs and hybrid_brs_block.
+    parser.add_argument("--lam", type=float, default=0.85)
+    # Minimum reputation cutoff (theta_min in (-1, 0)) for pure_brs peer quarantine.
+    parser.add_argument("--theta_min", type=float, default=-0.50)
+    parser.add_argument("--subfolder", type=str, default="", help="Optional subfolder inside results/ to store outputs")
     parser.add_argument("--no_show", action="store_true")
     args = parser.parse_args()
 
@@ -88,6 +99,11 @@ def main():
     T = args.t_horizon if args.t_horizon else K_ARMS * 250
     POLICY = args.policy
     BETA = args.beta
+    DEFENSE = args.defense
+    ETA = args.eta
+    LAM = args.lam
+    THETA_MIN = args.theta_min
+    OUT_DIR = os.path.join("results", args.subfolder) if args.subfolder else "results"
     SHOW_PLOT = not args.no_show
     
     if args.explore_param is None:
@@ -102,22 +118,27 @@ def main():
     stds = stds[:actual_k]
     t_steps = np.arange(1, T + 1)
     
-    run_suffix = f"ConstantTotal_{POLICY}_K{actual_k}_T{T}"
+    # Keep unprotected baseline filenames unchanged; append defense name for active defenses.
+    if DEFENSE == "none":
+        run_suffix = f"ConstantTotal_{POLICY}_K{actual_k}_T{T}"
+    else:
+        run_suffix = f"ConstantTotal_{POLICY}_{DEFENSE}_K{actual_k}_T{T}"
     scenarios = [(20, 5), (15, 10), (10, 15), (5, 20)] # Constant Total 25
     
     print(f"\n=============================================")
     print(f"   STARTING MAB SIMULATION (TOTAL 25 AGENTS)")
-    print(f"   Policy: {POLICY} | K={actual_k} | T={T}")
+    print(f"   Policy: {POLICY} | Defense: {DEFENSE} | K={actual_k} | T={T}")
+    print(f"   Params: eta={ETA}, lam={LAM}, theta_min={THETA_MIN}")
     print(f"=============================================\n")
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=6) as executor:
         # ---> UPDATE: MEMASUKKAN MEANS DAN STDS KE FUNGSI SIMULASI <---
         f_single = executor.submit(run_single_agent_baseline, means, stds, T, POLICY, EXPLORE_PARAM, 0)
-        f_coop = executor.submit(run_multi_agent_system, means, stds, T, 25, 0, BETA, POLICY, EXPLORE_PARAM, 1)
+        f_coop = executor.submit(run_multi_agent_system, means, stds, T, 25, 0, BETA, POLICY, EXPLORE_PARAM, 1, DEFENSE, ETA, LAM, THETA_MIN)
         
         f_mal_dict = {}
         for idx, (n_h, m_m) in enumerate(scenarios):
-            f_mal_dict[f"n{n_h}_m{m_m}"] = executor.submit(run_multi_agent_system, means, stds, T, n_h, m_m, BETA, POLICY, EXPLORE_PARAM, 2 + idx)
+            f_mal_dict[f"n{n_h}_m{m_m}"] = executor.submit(run_multi_agent_system, means, stds, T, n_h, m_m, BETA, POLICY, EXPLORE_PARAM, 2 + idx, DEFENSE, ETA, LAM, THETA_MIN)
         
         reg_single, rew_single = f_single.result()
         reg_coop, rew_coop = f_coop.result()
@@ -127,14 +148,27 @@ def main():
             mal_results[key] = future.result() 
 
     print("\nSimulations finished! Saving data...")
-    os.makedirs("results", exist_ok=True)
+    os.makedirs(OUT_DIR, exist_ok=True)
     
-    save_data = {'t_steps': t_steps, 'k_arms': actual_k, 'policy': POLICY, 'reg_single': reg_single, 'rew_single': rew_single, 'reg_coop': reg_coop, 'rew_coop': rew_coop}
+    # Save simulation arrays alongside defense metadata for reproducibility and post-processing.
+    save_data = {
+        't_steps': t_steps,
+        'k_arms': actual_k,
+        'policy': POLICY,
+        'defense': DEFENSE,
+        'eta': ETA,
+        'lam': LAM,
+        'theta_min': THETA_MIN,
+        'reg_single': reg_single,
+        'rew_single': rew_single,
+        'reg_coop': reg_coop,
+        'rew_coop': rew_coop,
+    }
     for key, (reg, rew) in mal_results.items():
         save_data[f'reg_mal_{key}'] = reg
         save_data[f'rew_mal_{key}'] = rew
         
-    np.savez(os.path.join("results", f"mab_results_{run_suffix}.npz"), **save_data)
+    np.savez(os.path.join(OUT_DIR, f"mab_results_{run_suffix}.npz"), **save_data)
 
     regret_dict = {'single': reg_single, 'coop': reg_coop}
     reward_dict = {'single': rew_single, 'coop': rew_coop}
@@ -142,8 +176,8 @@ def main():
         regret_dict[f'mal_{key}'] = reg
         reward_dict[f'mal_{key}'] = rew
     
-    plot_results(t_steps, {'regret': regret_dict, 'reward': reward_dict}, actual_k, POLICY, run_suffix, show_plot=SHOW_PLOT)
-    print(f"Data saved successfully with suffix '{run_suffix}'!")
+    plot_results(t_steps, {'regret': regret_dict, 'reward': reward_dict}, actual_k, POLICY, run_suffix, show_plot=SHOW_PLOT, defense=DEFENSE, out_dir=OUT_DIR)
+    print(f"Data saved successfully to '{OUT_DIR}' with suffix '{run_suffix}'!")
 
 if __name__ == "__main__":
     main()
